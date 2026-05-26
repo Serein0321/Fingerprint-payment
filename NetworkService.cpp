@@ -30,14 +30,37 @@ NetworkService::NetworkService()
 
 void NetworkService::begin() {
 	WiFi.mode(WIFI_STA);
-	WiFi.setAutoReconnect(true);
-	WiFi.begin();
+	WiFi.setSleep(false);
+	WiFi.setAutoReconnect(false);
+	WiFi.disconnect(false, false);
+	delay(100);
 }
 
 void NetworkService::tick() {}
 
 uint8_t NetworkService::scanNetworks(WifiNetworkInfo* results, uint8_t maxResults) {
-	const int found = WiFi.scanNetworks();
+	WiFi.mode(WIFI_STA);
+	WiFi.setSleep(false);
+
+	if (WiFi.status() != WL_CONNECTED) {
+		WiFi.setAutoReconnect(false);
+		WiFi.disconnect(false, false);
+		delay(150);
+	}
+
+	WiFi.scanDelete();
+	int found = WiFi.scanNetworks(false, true);
+	Serial.print("WiFi scan result: ");
+	Serial.println(found);
+
+	if (found <= 0) {
+		WiFi.scanDelete();
+		delay(250);
+		found = WiFi.scanNetworks(false, true);
+		Serial.print("WiFi scan retry result: ");
+		Serial.println(found);
+	}
+
 	const uint8_t count = found < 0 ? 0 : static_cast<uint8_t>(found > maxResults ? maxResults : found);
 
 	for (uint8_t index = 0; index < count; ++index) {
@@ -53,8 +76,10 @@ uint8_t NetworkService::scanNetworks(WifiNetworkInfo* results, uint8_t maxResult
 bool NetworkService::connectToWifi(const char* ssid, const char* password, char* errorMessage, size_t errorLength) {
 	setError(errorMessage, errorLength, "");
 	WiFi.mode(WIFI_STA);
+	WiFi.setSleep(false);
 	WiFi.disconnect();
 	delay(200);
+	WiFi.setAutoReconnect(true);
 	WiFi.begin(ssid, password);
 
 	const unsigned long startMs = millis();

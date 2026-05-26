@@ -7,6 +7,10 @@
 namespace {
 HardwareSerial fingerprintSerial(2);
 Adafruit_Fingerprint fingerprintSensor(&fingerprintSerial);
+constexpr uint8_t MAX_CONSECUTIVE_PACKET_ERRORS = 80;
+constexpr uint8_t FINGERPRINT_POLL_DELAY_MS = 200;
+constexpr uint16_t FINGERPRINT_SETTLE_DELAY_MS = 300;
+constexpr uint32_t FINGERPRINT_BAUD_CANDIDATES[] = {FINGERPRINT_BAUD_RATE, 115200, 19200, 9600};
 
 void copyText(char* destination, size_t length, const char* source) {
 	if (length == 0) {
@@ -22,44 +26,70 @@ void copyText(char* destination, size_t length, const char* source) {
 	destination[length - 1] = '\0';
 }
 
-bool waitForFingerImage(uint16_t timeoutMs, char* errorMessage, size_t errorLength) {
-	const unsigned long startMs = millis();
 
-	while (millis() - startMs < timeoutMs) {
+bool waitForFingerImage(char* errorMessage, size_t errorLength) {
+	uint8_t packetErrors = 0;
+
+	while (true) {
 		const uint8_t response = fingerprintSensor.getImage();
 
 		if (response == FINGERPRINT_OK) {
 			return true;
 		}
 
-		if (response != FINGERPRINT_NOFINGER && response != FINGERPRINT_PACKETRECIEVEERR) {
+		if (response == FINGERPRINT_NOFINGER) {
+			packetErrors = 0;
+			delay(FINGERPRINT_POLL_DELAY_MS);
+			continue;
+		}
+
+		if (response == FINGERPRINT_PACKETRECIEVEERR) {
+			packetErrors++;
+			if (packetErrors >= MAX_CONSECUTIVE_PACKET_ERRORS) {
+				copyText(errorMessage, errorLength, "Sensor packet");
+				return false;
+			}
+
+			delay(FINGERPRINT_POLL_DELAY_MS);
+			continue;
+		}
+
+		if (response != FINGERPRINT_NOFINGER) {
 			copyText(errorMessage, errorLength, "Bad finger img");
 			return false;
 		}
-
-		delay(80);
 	}
-
-	copyText(errorMessage, errorLength, "Finger timeout");
-	return false;
 }
 
-bool waitForFingerRelease(uint16_t timeoutMs) {
+bool waitForFingerRelease(uint16_t timeoutMs, char* errorMessage = nullptr, size_t errorLength = 0) {
 	const unsigned long startMs = millis();
+	uint8_t packetErrors = 0;
 
-	while (millis() - startMs < timeoutMs) {
-		if (fingerprintSensor.getImage() == FINGERPRINT_NOFINGER) {
+	while (timeoutMs == 0 || millis() - startMs < timeoutMs) {
+		const uint8_t response = fingerprintSensor.getImage();
+		if (response == FINGERPRINT_NOFINGER) {
 			return true;
 		}
 
-		delay(80);
+		if (response == FINGERPRINT_PACKETRECIEVEERR) {
+			packetErrors++;
+			if (packetErrors >= MAX_CONSECUTIVE_PACKET_ERRORS) {
+				copyText(errorMessage, errorLength, "Sensor packet");
+				return false;
+			}
+		} else {
+			packetErrors = 0;
+		}
+
+		delay(FINGERPRINT_POLL_DELAY_MS);
 	}
 
+	copyText(errorMessage, errorLength, "Release finger");
 	return false;
 }
 
 bool captureImageToBuffer(uint8_t bufferId, char* errorMessage, size_t errorLength) {
-	if (!waitForFingerImage(15000, errorMessage, errorLength)) {
+	if (!waitForFingerImage(errorMessage, errorLength)) {
 		return false;
 	}
 
@@ -73,34 +103,49 @@ bool captureImageToBuffer(uint8_t bufferId, char* errorMessage, size_t errorLeng
 }
 
 int findFreeTemplateId(char* errorMessage, size_t errorLength) {
-	for (uint16_t templateId = 1; templateId <= FINGERPRINT_MAX_TEMPLATE_ID; ++templateId) {
-		const uint8_t response = fingerprintSensor.loadModel(templateId);
+	const uint8_t countResponse = fingerprintSensor.getTemplateCount();
+	if (countResponse != FINGERPRINT_OK) {
+		copyText(errorMessage, errorLength, countResponse == FINGERPRINT_PACKETRECIEVEERR ? "Sensor packet" : "Sensor comm");
+		return -1;
+	}
 
-		if (response == FINGERPRINT_OK) {
+	const int templateId = static_cast<int>(fingerprintSensor.templateCount) + 1;
+	if (templateId <= 0 || templateId > FINGERPRINT_MAX_TEMPLATE_ID) {
+		copyText(errorMessage, errorLength, "No free slot");
+		return -1;
+	}
+
+	return templateId;
+}
+
+bool connectSensor() {
+	uint32_t lastBaud = 0;
+
+	for (size_t index = 0; index < sizeof(FINGERPRINT_BAUD_CANDIDATES) / sizeof(FINGERPRINT_BAUD_CANDIDATES[0]); ++index) {
+		const uint32_t baud = FINGERPRINT_BAUD_CANDIDATES[index];
+		if (baud == lastBaud) {
 			continue;
 		}
 
-		if (response == FINGERPRINT_PACKETRECIEVEERR) {
-			copyText(errorMessage, errorLength, "Sensor packet");
-			return -1;
+		fingerprintSerial.begin(baud, SERIAL_8N1, FINGERPRINT_RX_PIN, FINGERPRINT_TX_PIN);
+		fingerprintSensor.begin(baud);
+		delay(FINGERPRINT_SETTLE_DELAY_MS);
+
+		if (fingerprintSensor.verifyPassword()) {
+			return true;
 		}
 
-		return templateId;
+		lastBaud = baud;
 	}
 
-	copyText(errorMessage, errorLength, "No free slot");
-	return -1;
+	return false;
 }
 }
 
 FingerprintService::FingerprintService() {}
 
 bool FingerprintService::begin(char* errorMessage, size_t errorLength) {
-	fingerprintSerial.begin(FINGERPRINT_BAUD_RATE, SERIAL_8N1, FINGERPRINT_RX_PIN, FINGERPRINT_TX_PIN);
-	fingerprintSensor.begin(FINGERPRINT_BAUD_RATE);
-	delay(200);
-
-	if (!fingerprintSensor.verifyPassword()) {
+	if (!connectSensor()) {
 		copyText(errorMessage, errorLength, "No FP sensor");
 		return false;
 	}
@@ -137,8 +182,9 @@ bool FingerprintService::enrollFingerprint(int& templateId, char* errorMessage, 
 		return false;
 	}
 
-	if (!waitForFingerRelease(10000)) {
-		copyText(errorMessage, errorLength, "Release finger");
+	delay(2000);
+
+	if (!waitForFingerRelease(0, errorMessage, errorLength)) {
 		return false;
 	}
 
@@ -165,4 +211,15 @@ bool FingerprintService::enrollFingerprint(int& templateId, char* errorMessage, 
 
 bool FingerprintService::deleteTemplate(int templateId) {
 	return fingerprintSensor.deleteModel(templateId) == FINGERPRINT_OK;
+}
+
+bool FingerprintService::clearDatabase(char* errorMessage, size_t errorLength) {
+	const uint8_t response = fingerprintSensor.emptyDatabase();
+	if (response != FINGERPRINT_OK) {
+		copyText(errorMessage, errorLength, response == FINGERPRINT_PACKETRECIEVEERR ? "Sensor packet" : "Delete fail");
+		return false;
+	}
+
+	copyText(errorMessage, errorLength, "");
+	return true;
 }

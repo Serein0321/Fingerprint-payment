@@ -10,4 +10,5 @@ public:
   bool searchFingerprint(int& templateId, char* errorMessage, size_t errorLength);
   bool enrollFingerprint(int& templateId, char* errorMessage, size_t errorLength);
   bool deleteTemplate(int templateId);
+  bool clearDatabase(char* errorMessage, size_t errorLength);
 };

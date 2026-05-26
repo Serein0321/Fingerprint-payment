@@ -14,8 +14,11 @@ const char* const MENU_ITEMS[] = {
 	"Consume",
 	"Top Up",
 	"Records",
+	"Delete FP DB",
 	"Sys Info"
 };
+
+constexpr uint8_t MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
 
 void sanitizeText(const char* source, char* destination, size_t length) {
 	if (length == 0) {
@@ -114,8 +117,15 @@ void OledUi::renderMenu(uint8_t selectedIndex) {
 	display.clearDisplay();
 	drawHeader("Main Menu");
 
-	for (uint8_t index = 0; index < 6; ++index) {
-		display.setCursor(0, 12 + (index * 7));
+	const uint8_t visibleRows = 6;
+	uint8_t startIndex = 0;
+	if (selectedIndex >= visibleRows) {
+		startIndex = selectedIndex - visibleRows + 1;
+	}
+
+	for (uint8_t row = 0; row < visibleRows && (startIndex + row) < MENU_ITEM_COUNT; ++row) {
+		const uint8_t index = startIndex + row;
+		display.setCursor(0, 12 + (row * 7));
 		display.print(index == selectedIndex ? '>' : ' ');
 		display.print(MENU_ITEMS[index]);
 	}

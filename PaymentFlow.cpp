@@ -3,7 +3,7 @@
 #include <cstring>
 
 namespace {
-constexpr uint8_t MENU_COUNT = 6;
+constexpr uint8_t MENU_COUNT = 7;
 
 void copyText(char* destination, size_t length, const char* source) {
 	if (length == 0) {
@@ -74,11 +74,11 @@ PaymentFlow::PaymentFlow(KeypadInput& keypadInput, OledUi& oledUi, NetworkServic
 }
 
 void PaymentFlow::begin() {
-	_keypadInput.begin();
-	const bool oledReady = _oledUi.begin();
+	_keypadInput.begin();//初始化键盘输入系统，准备读取用户的按键操作。
+	const bool oledReady = _oledUi.begin();//初始化OLED显示屏，准备显示用户界面，并返回是否成功。
 	_networkService.begin();
 
-	char fingerprintError[24];
+	char fingerprintError[24];//初始化指纹传感器，并在失败时获取错误信息。
 	if (!_fingerprintService.begin(fingerprintError, sizeof(fingerprintError))) {
 		Serial.print("Fingerprint init failed: ");
 		Serial.println(fingerprintError);
@@ -230,7 +230,7 @@ void PaymentFlow::handleWifiPassword(KeyAction action) {
 	}
 }
 
-void PaymentFlow::handleStudentInput(KeyAction action) {
+void PaymentFlow::handleStudentInput(KeyAction action) {//处理学生ID输入界面的按键操作，包括数字输入、删除、返回和确认操作，以便用户能够正确输入学生ID并进行后续的注册或记录查询操作。
 	if (KeypadInput::isDigit(action)) {
 		appendDigit(_entryBuffer, sizeof(_entryBuffer), KeypadInput::toDigit(action));
 		renderCurrentScreen();
@@ -355,6 +355,9 @@ void PaymentFlow::openMenuSelection() {
 			renderCurrentScreen();
 			break;
 		case 5:
+			clearFingerprintDatabase();
+			break;
+		case 6:
 			_screen = AppScreen::SystemInfo;
 			renderCurrentScreen();
 			break;
@@ -395,24 +398,36 @@ void PaymentFlow::connectSelectedWifi() {
 	);
 }
 
-void PaymentFlow::processEnrollment() {
+void PaymentFlow::clearFingerprintDatabase() {
 	char errorMessage[24];
-	int templateId = 0;
 
-	if (!ensureWifiConnection()) {
+	_oledUi.renderMessage("Delete FP DB", "Deleting...");
+	if (!_fingerprintService.clearDatabase(errorMessage, sizeof(errorMessage))) {
+		showTemporaryMessage("Delete FP DB", "Delete failed", errorMessage);
 		return;
 	}
 
-	_oledUi.renderMessage("Enroll FP", "Lookup student", _entryBuffer);
-	if (!_apiClient.lookupStudent(_entryBuffer, _studentLookup, errorMessage, sizeof(errorMessage))) {
+	showTemporaryMessage("Delete FP DB", "All prints deleted", "", "", 1500UL);
+}
+
+void PaymentFlow::processEnrollment() {//处理学生注册流程，包括验证WiFi连接、查询学生信息、指纹录入和注册，以及根据结果显示相应的界面和信息。
+	char errorMessage[24];
+	int templateId = 0;
+
+	if (!ensureWifiConnection()) {//首先检查WiFi连接，如果未连接则提示用户并返回。
+		return;
+	}
+
+	_oledUi.renderMessage("Enroll FP", "Lookup student", _entryBuffer);//显示正在查询学生信息的界面。
+	if (!_apiClient.lookupStudent(_entryBuffer, _studentLookup, errorMessage, sizeof(errorMessage))) {//调用API客户端查询学生信息，如果失败则显示错误信息并返回。
 		showTemporaryMessage("Enroll FP", errorMessage);
 		return;
 	}
 
-	_oledUi.renderMessage("Enroll FP", _studentLookup.studentId, _studentLookup.studentName[0] == '\0' ? "Name unread" : _studentLookup.studentName, "Place finger 2x");
+	_oledUi.renderMessage("Enroll FP", _studentLookup.studentId, _studentLookup.studentName[0] == '\0' ? "Name unread" : _studentLookup.studentName, "Place/lift/place");//显示指纹录入界面，提示用户放置手指进行录入。
 	delay(900);
 
-	if (!_fingerprintService.enrollFingerprint(templateId, errorMessage, sizeof(errorMessage))) {
+	if (!_fingerprintService.enrollFingerprint(templateId, errorMessage, sizeof(errorMessage))) {//
 		showTemporaryMessage("Enroll FP", errorMessage);
 		return;
 	}

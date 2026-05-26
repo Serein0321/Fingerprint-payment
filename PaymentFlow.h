@@ -57,6 +57,7 @@ private:
   void openMenuSelection();
   void scanWifiNetworks();
   void connectSelectedWifi();
+  void clearFingerprintDatabase();
   void processEnrollment();
   void processPayment(ActionType action);
   void processRecordLookup();
